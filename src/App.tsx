@@ -49,6 +49,8 @@ import {
   floatToIEEE754,
   decToGray,
   grayToDec,
+  decToBCD,
+  decToExcess3,
   encodeHamming74,
   getSignedInfo,
   generateReferenceData
@@ -71,79 +73,290 @@ function cn(...inputs: ClassValue[]) {
 // --- Components ---
 
 const CircuitSchematic = ({ sop, variables }: { sop: string, variables: string[] }) => {
-  // Simple heuristic parsing of SOP formatted as "(A·B) + (C·D)"
-  // Our LogicSolver returns things like "(!A · !B · C) + (!A · B · !C)"
-  const terms = sop.split('+').map(t => t.trim().replace(/[\(\)]/g, ''));
-  
+  const [valStates, setValStates] = useState<Record<string, boolean>>(() => {
+    const initial: Record<string, boolean> = {};
+    variables.forEach(v => initial[v] = false);
+    return initial;
+  });
+  const [selectedGate, setSelectedGate] = useState<{ type: 'AND' | 'OR' | 'NOT', index: number, data?: string[] } | null>(null);
+
+  // Sync valStates if variables change
+  React.useEffect(() => {
+    setValStates(prev => {
+      const next = { ...prev };
+      variables.forEach(v => {
+        if (!(v in next)) next[v] = false;
+      });
+      return next;
+    });
+  }, [variables]);
+
+  const toggleVar = (v: string) => {
+    setValStates(prev => ({ ...prev, [v]: !prev[v] }));
+  };
+
   if (sop === "0" || sop === "1") {
     return (
-      <div className="h-[240px] w-full bg-[#0a0b10] border border-[#2d3142] rounded flex items-center justify-center font-mono text-cyan-400">
-        CONSTANT LOGIC {sop}
+      <div className="h-[240px] w-full bg-[#0a0b10] border border-[#2d3142] rounded flex flex-col items-center justify-center font-mono text-cyan-400 gap-2">
+        <div className="text-[10px] text-[#5e6684] uppercase tracking-widest">Constant Termination</div>
+        <div className="text-2xl font-black">{sop === "1" ? "VCC (1)" : "GND (0)"}</div>
       </div>
     );
   }
 
+  // Parse terms
+  const terms = sop.split('+').map(t => {
+    const raw = t.trim().replace(/[\(\)]/g, '');
+    return raw.split('·').map(l => l.trim());
+  });
+
+  const termResults = terms.map(literals => {
+    return literals.every(lit => {
+      const isInverted = lit.startsWith('!');
+      const varName = isInverted ? lit.slice(1) : lit;
+      const val = valStates[varName] || false;
+      return isInverted ? !val : val;
+    });
+  });
+
+  const finalResult = termResults.some(r => r);
+
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center bg-[#1a1c26] p-2 rounded">
-        <span className="text-[9px] font-bold text-[#5e6684] uppercase">Generated Gate Logic Schematic</span>
-        <div className="flex gap-4">
-           <div className="flex items-center gap-1"><Zap size={8} className="text-cyan-400" /><span className="text-[7px]">SOP PATH</span></div>
-           <div className="flex items-center gap-1"><Zap size={8} className="text-amber-500" /><span className="text-[7px]">FINAL OUTPUT</span></div>
+      <div className="flex justify-between items-center bg-[#1a1c26] p-3 rounded-lg border border-white/5">
+        <div className="flex items-center gap-3">
+          <div className="p-1.5 bg-cyan-500/10 rounded border border-cyan-500/20">
+            <Cpu size={14} className="text-cyan-400" />
+          </div>
+          <span className="text-[10px] font-black text-white uppercase tracking-widest">Interactive Logic Simulator</span>
+        </div>
+        <div className="flex gap-2">
+           <button 
+             onClick={() => setSelectedGate(null)}
+             className="text-[8px] font-black hover:text-white text-[#5e6684] uppercase tracking-tighter transition-colors"
+           >
+             [Reset View]
+           </button>
         </div>
       </div>
 
-      <div className="relative h-[240px] w-full bg-[#0a0b10] border border-[#2d3142] rounded overflow-hidden p-4 font-mono">
-         {/* Variable Rails */}
-         <div className="absolute top-4 left-4 space-y-4">
-            {variables.map(v => (
-              <div key={v} className="flex items-center gap-2 group">
-                <div className="w-6 h-6 border border-cyan-500/50 flex items-center justify-center text-[10px] text-cyan-400 font-bold bg-cyan-900/10">
-                  {v}
-                </div>
-                <div className="w-8 h-px bg-cyan-500/20 group-hover:bg-cyan-500 transition-colors" />
-              </div>
-            ))}
-         </div>
+      <div className="relative min-h-[400px] w-full bg-[#08090d] border border-[#2d3142] rounded-xl overflow-hidden p-6 font-mono shadow-2xl">
+         {/* Backdrop Grid */}
+         <div className="absolute inset-0 opacity-[0.05] pointer-events-none" style={{ backgroundImage: 'radial-gradient(#06b6d4 1px, transparent 0)', backgroundSize: '20px 20px' }} />
+         
+         <div className="relative z-10 flex h-full gap-6">
+            {/* Input Controls */}
+            <div className="flex flex-col justify-center gap-6">
+               <div className="text-[8px] text-cyan-500/50 uppercase font-black tracking-widest mb-2 transform -rotate-90 origin-left translate-x-2">Inputs</div>
+               {variables.map((v, idx) => (
+                 <div key={v} className="flex items-center gap-4">
+                   <button 
+                     onClick={() => toggleVar(v)}
+                     className={cn(
+                       "w-8 h-8 border flex items-center justify-center text-xs font-black transition-all hover:scale-110 active:scale-95 shadow-lg relative group/btn",
+                       valStates[v] 
+                         ? "bg-cyan-500 border-cyan-300 text-black shadow-cyan-500/20" 
+                         : "bg-[#1a1c26] border-[#2d3142] text-[#5e6684] hover:border-cyan-500/40"
+                     )}
+                   >
+                     {v}
+                     <div className="absolute -top-1 -right-1 w-2 h-2 bg-white/20 rounded-full scale-0 group-hover/btn:scale-100 transition-transform" />
+                   </button>
+                   <div className={cn(
+                     "w-8 h-[2px] transition-all duration-500",
+                     valStates[v] ? "bg-cyan-400 shadow-[0_0_10px_#22d3ee]" : "bg-[#2d3142]"
+                   )} />
+                 </div>
+               ))}
+            </div>
 
-         {/* Gate Layers */}
-         <div className="flex justify-around items-center h-full ml-16 gap-4">
-            <div className="space-y-3 flex flex-col justify-center max-h-full overflow-y-auto">
-               {terms.slice(0, 8).map((term, i) => (
+            {/* NOT Layer */}
+            <div className="flex flex-col justify-center gap-6">
+               {variables.map((v, i) => (
+                 <div key={v} className="flex items-center gap-3">
+                    <button 
+                      onClick={() => setSelectedGate({ type: 'NOT', index: i, data: [v] })}
+                      className={cn(
+                        "w-10 h-10 border rounded-full flex items-center justify-center relative transition-all duration-500 hover:scale-110",
+                        !valStates[v] 
+                          ? "bg-purple-500/10 border-purple-500/50 shadow-[0_0_10px_rgba(168,85,247,0.2)]" 
+                          : "bg-[#0a0b10] border-[#2d3142]"
+                      )}
+                    >
+                       <div className={cn(
+                         "text-[8px] font-black italic",
+                         !valStates[v] ? "text-purple-400" : "text-[#5e6684]"
+                       )}>NOT</div>
+                       <div className="absolute -right-1.5 top-1/2 -translate-y-1/2 w-1.5 h-1.5 rounded-full border border-inherit bg-inherit" />
+                    </button>
+                    <div className={cn(
+                      "w-6 h-[2px] transition-all duration-500",
+                      !valStates[v] ? "bg-purple-400" : "bg-[#2d3142]"
+                    )} />
+                 </div>
+               ))}
+            </div>
+
+            {/* AND Layer */}
+            <div className="flex-1 flex flex-col justify-center gap-4 max-h-[350px] overflow-y-auto px-4 py-2 custom-scrollbar">
+               {terms.map((literals, i) => (
                  <motion.div 
                    key={i}
-                   initial={{ opacity: 0, x: -10 }}
+                   initial={{ opacity: 0, x: -20 }}
                    animate={{ opacity: 1, x: 0 }}
-                   transition={{ delay: i * 0.05 }}
-                   className="relative group"
+                   transition={{ delay: i * 0.1 }}
+                   className="relative flex items-center gap-4 group"
                  >
-                    <div className="px-2 py-1 bg-cyan-500/10 border border-cyan-500/30 rounded flex items-center gap-2 whitespace-nowrap">
-                       <span className="text-[7px] text-cyan-400 uppercase font-black">AND</span>
-                       <span className="text-[9px] text-white/70">{term}</span>
-                    </div>
-                    {/* Connector to OR */}
-                    <div className="absolute top-1/2 -right-4 w-4 h-px bg-cyan-500/20 group-hover:bg-cyan-500" />
+                    <div className="absolute -left-4 top-1/2 -translate-y-1/2 w-4 h-[1px] bg-white/5 transition-colors" />
+                    
+                    <button 
+                      onClick={() => setSelectedGate({ type: 'AND', index: i, data: literals })}
+                      className={cn(
+                        "flex-1 p-3 rounded-lg border transition-all duration-500 flex items-center justify-between group/gate text-left outline-none",
+                        termResults[i] 
+                          ? "bg-cyan-500/10 border-cyan-500/50 shadow-[0_0_15px_rgba(6,182,212,0.1)]" 
+                          : "bg-[#0a0b10] border-[#2d3142] hover:border-[#3d4359]"
+                      )}
+                    >
+                       <div className="flex flex-col gap-1">
+                          <span className={cn(
+                            "text-[8px] font-black uppercase tracking-widest",
+                            termResults[i] ? "text-cyan-400" : "text-[#5e6684]"
+                          )}>GATE_7408_{i}</span>
+                          <div className="flex flex-wrap gap-1">
+                             {literals.map((lit, li) => (
+                               <span key={li} className="text-[10px] text-white/50">{lit}</span>
+                             ))}
+                          </div>
+                       </div>
+                       <Activity 
+                         size={14} 
+                         className={cn(
+                           "transition-all duration-700",
+                           termResults[i] ? "text-cyan-400" : "text-[#2d3142]"
+                         )} 
+                       />
+                    </button>
+
+                    <div className={cn(
+                      "w-8 h-[2px] transition-all duration-700",
+                      termResults[i] ? "bg-cyan-400" : "bg-[#2d3142]"
+                    )} />
                  </motion.div>
                ))}
-               {terms.length > 8 && <div className="text-[8px] text-cyan-500 text-center">... + {terms.length - 8} MORE TERMS</div>}
             </div>
 
-            <div className="relative">
-               <motion.div 
-                 initial={{ scale: 0.8, opacity: 0 }}
-                 animate={{ scale: 1, opacity: 1 }}
-                 className="w-12 h-12 border border-amber-500/50 bg-amber-500/5 rotate-45 flex items-center justify-center rounded-sm"
+            {/* OR Layer */}
+            <div className="flex flex-col justify-center items-center gap-2 px-6">
+               <button 
+                  onClick={() => setSelectedGate({ type: 'OR', index: 0, data: terms.map(t => t.join('·')) })}
+                  className="relative group outline-none"
                >
-                  <span className="-rotate-45 text-[8px] font-black text-amber-500">OR</span>
-               </motion.div>
-               <div className="absolute top-1/2 -right-10 w-10 h-px bg-amber-500 shadow-[0_0_10px_#f59e0b]" />
-            </div>
-         </div>
+                  <div className={cn(
+                    "absolute inset-0 blur-xl opacity-20 transition-all duration-1000",
+                    finalResult ? "bg-amber-400 scale-150" : "bg-transparent"
+                  )} />
+                  
+                  <motion.div 
+                    animate={{ rotate: finalResult ? 135 : 45 }}
+                    transition={{ type: "spring", stiffness: 100 }}
+                    className={cn(
+                      "w-16 h-16 border-2 flex items-center justify-center rounded-lg transition-all duration-700 cursor-pointer hover:scale-110",
+                      finalResult 
+                        ? "bg-amber-500/20 border-amber-400 shadow-[0_0_30px_rgba(245,158,11,0.3)]" 
+                        : "bg-[#0a0b10] border-[#2d3142]"
+                    )}
+                  >
+                     <div className={cn(
+                       "transition-all duration-700 font-black flex flex-col items-center",
+                       finalResult ? "text-amber-400 -rotate-[135deg]" : "text-[#2d3142] -rotate-45"
+                     )}>
+                        <span className="text-[10px]">7432</span>
+                        <Zap size={16} />
+                     </div>
+                  </motion.div>
+               </button>
 
-         {/* Backdrop Grid */}
-         <div className="absolute inset-0 opacity-[0.03] pointer-events-none" style={{ backgroundImage: 'radial-gradient(#06b6d4 1px, transparent 0)', backgroundSize: '15px 15px' }} />
+               <div className="mt-8 flex flex-col items-center gap-2">
+                  <div className={cn(
+                    "w-10 h-10 rounded shadow-inner border flex items-center justify-center text-xl font-black transition-all duration-1000",
+                    finalResult 
+                      ? "bg-amber-500 border-amber-300 text-black shadow-[0_0_50px_rgba(245,158,11,0.6)]" 
+                      : "bg-[#0a0b10] border-[#2d3142] text-[#1a1c26]"
+                  )}>
+                     {finalResult ? "1" : "0"}
+                  </div>
+               </div>
+            </div>
+
+            {/* Click info Overlay */}
+            {selectedGate && (
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="absolute inset-x-0 bottom-0 m-4 p-4 bg-[#1a1c26]/95 backdrop-blur border border-white/10 rounded-lg shadow-2xl z-50 overflow-hidden"
+              >
+                <div className="flex justify-between items-start mb-3">
+                   <div className="space-y-1">
+                      <div className="text-[10px] font-black text-cyan-400 uppercase tracking-widest">{selectedGate.type} Unit Diagnostics</div>
+                      <div className="text-[8px] text-[#5e6684] font-mono">ReferenceID: GATE_{selectedGate.type}_{selectedGate.index}</div>
+                   </div>
+                   <button onClick={() => setSelectedGate(null)} className="text-[#5e6684] hover:text-white"><RefreshCw size={12} /></button>
+                </div>
+                
+                <div className="grid grid-cols-2 gap-4 items-end">
+                   <div className="space-y-2">
+                      <div className="text-[8px] text-[#5e6684] uppercase font-bold">Input Signals</div>
+                      <div className="flex flex-wrap gap-2">
+                         {selectedGate.data?.map((d, i) => (
+                           <div key={i} className="flex flex-col items-center p-1.5 bg-black/40 rounded border border-white/5">
+                              <span className="text-[9px] text-white font-mono">{d}</span>
+                              <span className="text-[7px] text-cyan-500 font-black">
+                                {d.startsWith('!') ? (valStates[d.slice(1)] ? '0' : '1') : (valStates[d] ? '1' : '0')}
+                              </span>
+                           </div>
+                         ))}
+                      </div>
+                   </div>
+                   <div className="space-y-1 text-right">
+                      <div className="text-[8px] text-[#5e6684] uppercase font-bold">Local Output</div>
+                      <div className={cn(
+                        "text-2xl font-black font-mono",
+                        (selectedGate.type === 'AND' ? termResults[selectedGate.index] : 
+                         selectedGate.type === 'OR' ? finalResult :
+                         !valStates[selectedGate.data![0]]) ? "text-cyan-400" : "text-[#2d3142]"
+                      )}>
+                        {(selectedGate.type === 'AND' ? termResults[selectedGate.index] : 
+                          selectedGate.type === 'OR' ? finalResult :
+                          !valStates[selectedGate.data![0]]) ? '1' : '0'}
+                      </div>
+                   </div>
+                </div>
+                
+                <div className="mt-4 pt-3 border-t border-white/5 flex justify-between">
+                   <span className="text-[7px] text-[#5e6684] uppercase italic">Real-time vector: {selectedGate.data?.join(selectedGate.type === 'AND' ? ' ∧ ' : ' ∨ ')}</span>
+                   <span className="text-[7px] text-cyan-500/50 font-mono">Prop_Delay: 12ns</span>
+                </div>
+              </motion.div>
+            )}
+         </div>
       </div>
-      <p className="text-[8px] text-[#5e6684] italic uppercase text-center">System pathing derived from Quine-McCluskey minimization.</p>
+      
+      <div className="flex justify-between items-center px-2">
+        <div className="flex gap-4">
+           {variables.map(v => (
+             <div key={v} className="flex flex-col">
+               <span className="text-[7px] text-[#5e6684] uppercase mb-1">{v} IN</span>
+               <span className={cn("text-[8px] font-black font-mono", valStates[v] ? "text-cyan-400" : "text-[#2d3142]")}>
+                 {valStates[v] ? 'HIGH' : 'LOW'}
+               </span>
+             </div>
+           ))}
+        </div>
+        <p className="text-[8px] text-cyan-500/40 italic uppercase flex items-center gap-2">
+           <Zap size={10} /> Click gates and inputs for detailed diagnostic streams.
+        </p>
+      </div>
     </div>
   );
 }
@@ -311,88 +524,192 @@ const LogicGateIdentity = () => {
   );
 };
 
+const RippleCarryAdder = ({ valA, valB }: { valA: string, valB: string }) => {
+  const bitsA = valA.padStart(4, '0').split('').reverse();
+  const bitsB = valB.padStart(4, '0').split('').reverse();
+  
+  const carries = [0];
+  const sums = [];
+  for (let i = 0; i < 4; i++) {
+    const a = parseInt(bitsA[i]) || 0;
+    const b = parseInt(bitsB[i]) || 0;
+    const cin = carries[i];
+    sums.push(a ^ b ^ cin);
+    carries.push((a & b) | (cin & (a ^ b)));
+  }
+
+  return (
+    <div className="mt-8 p-6 bg-[#0a0b10] border border-[#2d3142] rounded-2xl relative overflow-hidden group">
+      <div className="absolute top-0 right-0 px-3 py-1 bg-cyan-500/10 border-b border-l border-white/5 text-[7px] font-black text-cyan-400 uppercase tracking-widest">PROPAGATION_BUS_v1</div>
+      <div className="mb-6">
+        <div className="flex items-center gap-2 mb-1">
+           <Cpu size={12} className="text-cyan-500" />
+           <h3 className="text-[9px] font-black text-white uppercase tracking-[0.2em]">4-Bit Cascaded Adder</h3>
+        </div>
+        <p className="text-[7px] text-[#5e6684] uppercase font-bold tracking-tighter italic">Ripple Carry Simulation [Signal Flow Analysis]</p>
+      </div>
+
+      <div className="flex flex-row-reverse justify-center gap-4">
+        {sums.map((sum, i) => {
+           const idx = i;
+           const isLast = i === 3;
+           return (
+             <div key={idx} className="flex flex-col gap-3 items-center">
+                <div className="flex flex-col gap-1 items-center pb-2 border-b border-white/5 w-full">
+                   <div className={cn("text-[9px] font-mono", bitsA[idx] === '1' ? "text-cyan-400" : "text-[#2d3142]")}>{bitsA[idx]}</div>
+                   <div className={cn("text-[9px] font-mono", bitsB[idx] === '1' ? "text-cyan-400" : "text-[#2d3142]")}>{bitsB[idx]}</div>
+                </div>
+
+                <div className={cn(
+                  "w-10 h-14 rounded border flex flex-col items-center justify-center transition-all duration-700 relative",
+                  sum === 1 ? "bg-cyan-500/10 border-cyan-400/50" : "bg-black/40 border-[#2d3142]"
+                )}>
+                   <div className="text-[6px] font-black text-cyan-500/30">FA_{idx}</div>
+                   <div className={cn("text-base font-mono font-bold", sum === 1 ? "text-cyan-400" : "text-[#2d3142]")}>{sum}</div>
+                   
+                   {!isLast && (
+                     <div className={cn(
+                       "absolute -right-4 top-1/2 -translate-y-1/2 w-4 h-px border-t border-dashed",
+                       carries[i+1] === 1 ? "border-amber-400" : "border-[#2d3142]"
+                     )}>
+                        {carries[i+1] === 1 && <div className="absolute -top-3 left-1/2 -translate-x-1/2 text-[5px] text-amber-500 font-black">C{i+1}</div>}
+                     </div>
+                   )}
+                </div>
+
+                <div className={cn("text-[9px] font-black font-mono", sum === 1 ? "text-white" : "text-[#1a1c26]")}>{sum}</div>
+             </div>
+           );
+        })}
+        <div className="flex flex-col gap-3 items-center justify-end h-full">
+           <div className={cn(
+             "w-8 h-14 rounded border border-dashed flex flex-col items-center justify-center",
+             carries[4] === 1 ? "bg-amber-500/5 border-amber-500/40" : "border-[#2d3142] opacity-20"
+           )}>
+              <div className="text-[5px] font-black text-amber-500">COUT</div>
+              <div className={cn("text-xs font-mono font-bold", carries[4] === 1 ? "text-amber-400" : "text-[#1a1c26]")}>{carries[4]}</div>
+           </div>
+           <div className="text-[9px] font-black text-amber-500 opacity-40">{carries[4]}</div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const FullAdder = ({ x, y, cin }: { x: number, y: number, cin: number }) => {
   const sum = x ^ y ^ cin;
   const cout = (x & y) | (cin & (x ^ y));
+  const xor1 = x ^ y;
+  const and1 = x & y;
+  const and2 = cin & xor1;
   
   return (
-    <div className="p-5 bg-black/40 border border-[#2d3142] rounded-lg mt-6 animate-in fade-in zoom-in duration-700">
-      <div className="text-[9px] text-cyan-500 font-black uppercase mb-6 tracking-[0.2em] text-center flex items-center justify-center gap-3">
-         <span className="h-px w-8 bg-cyan-500/20" /> Bit-Slice Logic Processor [L_UNIT] <span className="h-px w-8 bg-cyan-500/20" />
-      </div>
+    <div className="p-6 bg-[#08090d] border border-[#2d3142] rounded-2xl mt-8 shadow-2xl relative overflow-hidden group">
+      {/* Background Decor */}
+      <div className="absolute inset-0 opacity-[0.02] pointer-events-none" style={{ backgroundImage: 'radial-gradient(#06b6d4 1px, transparent 0)', backgroundSize: '16px 16px' }} />
+      <div className="absolute -right-20 -top-20 w-40 h-40 bg-cyan-500/10 blur-[80px] rounded-full" />
       
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-8 items-center max-w-2xl mx-auto">
-         <div className="space-y-6">
-            <div className="p-3 bg-[#0a0b10] border border-[#2d3142] rounded-md relative group">
-               <div className="flex justify-between items-center mb-2">
-                  <span className="text-[8px] text-[#5e6684] uppercase font-bold tracking-widest">Input_A</span>
-                  <div className={cn("w-1.5 h-1.5 rounded-full shadow-[0_0_5px]", x === 1 ? "bg-cyan-500 shadow-cyan-500" : "bg-[#2d3142]")} />
-               </div>
-               <div className={cn("text-2xl font-mono transition-colors", x === 1 ? "text-cyan-400" : "text-[#2d3142]")}>{x}</div>
-               <div className="absolute -right-4 top-1/2 -translate-y-1/2 w-4 h-px bg-cyan-500/30" />
-            </div>
-            
-            <div className="p-3 bg-[#0a0b10] border border-[#2d3142] rounded-md relative">
-               <div className="flex justify-between items-center mb-2">
-                  <span className="text-[8px] text-[#5e6684] uppercase font-bold tracking-widest">Input_B</span>
-                  <div className={cn("w-1.5 h-1.5 rounded-full shadow-[0_0_5px]", y === 1 ? "bg-cyan-500 shadow-cyan-500" : "bg-[#2d3142]")} />
-               </div>
-               <div className={cn("text-2xl font-mono transition-colors", y === 1 ? "text-cyan-400" : "text-[#2d3142]")}>{y}</div>
-               <div className="absolute -right-4 top-1/2 -translate-y-1/2 w-4 h-px bg-cyan-500/30" />
-            </div>
+      <div className="relative z-10">
+        <div className="flex justify-between items-center mb-8 pb-4 border-b border-white/5">
+          <div className="flex items-center gap-3">
+             <div className="p-2 bg-cyan-500/10 rounded-lg border border-cyan-500/20">
+                <Cpu size={16} className="text-cyan-400" />
+             </div>
+             <div>
+                <h3 className="text-[10px] font-black text-white uppercase tracking-[0.2em]">Bit-Slice Processor</h3>
+                <p className="text-[7px] text-[#5e6684] uppercase font-bold tracking-tighter">Full Adder Architecture [L_UNIT_X1]</p>
+             </div>
+          </div>
+          <div className="flex gap-4">
+             <div className="flex flex-col items-end">
+                <span className="text-[7px] text-[#5e6684] uppercase">Latency</span>
+                <span className="text-[9px] font-mono text-cyan-400">1.2ns</span>
+             </div>
+             <div className="flex flex-col items-end">
+                <span className="text-[7px] text-[#5e6684] uppercase">Status</span>
+                <span className="text-[9px] font-mono text-green-500 group-hover:animate-pulse">ACTIVE_SYNC</span>
+             </div>
+          </div>
+        </div>
 
-            <div className="p-3 bg-[#0a0b10] border border-[#2d3142] rounded-md relative shadow-[inset_0_0_15px_rgba(245,158,11,0.02)]">
-               <div className="flex justify-between items-center mb-2">
-                  <span className="text-[8px] text-amber-500 uppercase font-black tracking-widest">C_IN</span>
-                  <div className={cn("w-1.5 h-1.5 rounded-full shadow-[0_0_8px]", cin === 1 ? "bg-amber-500 shadow-amber-500" : "bg-[#2d3142]")} />
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
+          {/* Inputs Section */}
+          <div className="lg:col-span-2 space-y-4">
+             {[
+               { id: 'A', val: x, label: 'INPUT_A', color: 'bg-cyan-500' },
+               { id: 'B', val: y, label: 'INPUT_B', color: 'bg-cyan-500' },
+               { id: 'Cin', val: cin, label: 'CARRY_IN', color: 'bg-amber-500' }
+             ].map(input => (
+               <div key={input.id} className="p-3 bg-black/40 border border-[#2d3142] rounded-xl relative group/input hover:border-white/10 transition-all">
+                  <div className="flex justify-between items-center mb-1">
+                     <span className="text-[7px] font-black text-[#5e6684] uppercase tracking-widest">{input.label}</span>
+                     <div className={cn("w-1.5 h-1.5 rounded-full shadow-[0_0_8px_rgba(255,255,255,0.1)]", input.val === 1 ? input.color : "bg-[#1a1c26]")} />
+                  </div>
+                  <div className={cn("text-xl font-mono text-center transition-all", input.val === 1 ? "text-white scale-110" : "text-[#2d3142]")}>{input.val}</div>
                </div>
-               <div className={cn("text-2xl font-mono transition-colors text-center", cin === 1 ? "text-amber-400 underline decoration-amber-500/50 underline-offset-4" : "text-[#2d3142]")}>{cin}</div>
-               <div className="absolute -right-4 top-1/2 -translate-y-1/2 w-4 h-px bg-amber-500/30" />
-            </div>
-         </div>
-         
-         <div className="flex flex-col items-center justify-center py-4 bg-cyan-500/5 border border-cyan-500/20 rounded-full w-full aspect-square max-w-[160px] mx-auto shadow-[inset_0_0_30px_rgba(6,182,212,0.1)]">
-            <div className="text-[10px] text-cyan-400 font-black mb-1">ALU_CORE</div>
-            <div className="text-[7px] text-[#5e6684] uppercase tracking-tighter opacity-70">Processing...</div>
-            <div className="mt-4 flex gap-1">
-               <div className="w-1 h-3 bg-cyan-500/20 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-               <div className="w-1 h-5 bg-cyan-500/40 rounded-full animate-bounce" style={{ animationDelay: '100ms' }} />
-               <div className="w-1 h-3 bg-cyan-500/20 rounded-full animate-bounce" style={{ animationDelay: '200ms' }} />
-            </div>
-         </div>
+             ))}
+          </div>
 
-         <div className="space-y-8">
-            <div className="p-4 bg-[#0a0b10] border border-[#2d3142] rounded-md relative shadow-[0_0_20px_rgba(34,197,94,0.05)]">
-               <div className="flex justify-between items-center mb-2">
-                  <div className="flex items-center gap-2">
-                    <span className="block w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,1)]" />
-                    <span className="text-[9px] text-green-500 uppercase font-black">Sum Out</span>
-                  </div>
-               </div>
-               <div className={cn("text-4xl font-mono", sum === 1 ? "text-white" : "text-[#1a1c26]")}>{sum}</div>
-               <div className="absolute -left-4 top-1/2 -translate-y-1/2 w-4 h-px bg-cyan-500/30" />
-            </div>
-            
-            <div className="p-4 bg-[#0a0b10] border border-[#2d3142] rounded-md relative shadow-[0_0_20px_rgba(168,85,247,0.05)]">
-               <div className="flex justify-between items-center mb-2">
-                  <div className="flex items-center gap-2">
-                    <span className="block w-2 h-2 rounded-full bg-purple-500 shadow-[0_0_8px_rgba(168,85,247,1)]" />
-                    <span className="text-[9px] text-purple-400 uppercase font-black">C_OUT</span>
-                  </div>
-               </div>
-               <div className={cn("text-3xl font-mono", cout === 1 ? "text-purple-300" : "text-[#1a1c26]")}>{cout}</div>
-               <div className="absolute -left-4 top-1/2 -translate-y-1/2 w-4 h-px bg-amber-500/30" />
-            </div>
-         </div>
-      </div>
-      
-      <div className="mt-8 pt-4 border-t border-[#2d3142] grid grid-cols-2 gap-4 text-[8px] font-mono uppercase text-[#5e6684]">
-         <div className="flex items-center gap-2">
-            <span className="text-cyan-500 opacity-50 font-black">LOGIC_SUM:</span> S = A ⊕ B ⊕ C_in
-         </div>
-         <div className="flex items-center gap-2 text-right justify-end">
-            <span className="text-amber-500 opacity-50 font-black">LOGIC_CARRY:</span> C_out = (A·B) + (C_in·(A⊕B))
-         </div>
+          {/* Logic Gates Diagram */}
+          <div className="lg:col-span-8 relative min-h-[220px] flex items-center justify-center">
+            <svg width="100%" height="220" viewBox="0 0 500 220" className="opacity-90">
+              {/* Internal Signal Paths */}
+              <line x1="40" y1="40" x2="100" y2="60" stroke={x ? "#22d3ee" : "#2d3142"} strokeWidth="1.5" />
+              <line x1="40" y1="80" x2="100" y2="80" stroke={y ? "#22d3ee" : "#2d3142"} strokeWidth="1.5" />
+              <rect x="100" y="50" width="60" height="50" rx="4" fill="#0c1018" stroke={xor1 ? "#22d3ee" : "#2d3142"} strokeWidth="1.5" />
+              <text x="130" y="80" textAnchor="middle" className="text-[10px] font-black fill-white/30" pointerEvents="none">XOR</text>
+
+              <line x1="160" y1="75" x2="220" y2="40" stroke={xor1 ? "#22d3ee" : "#2d3142"} strokeWidth="1.5" />
+              <line x1="40" y1="120" x2="220" y2="70" stroke={cin ? "#f59e0b" : "#2d3142"} strokeWidth="1.5" />
+              <rect x="220" y="30" width="60" height="60" rx="4" fill="#0c1018" stroke={sum ? "#22d3ee" : "#2d3142"} strokeWidth="1.5" />
+              <text x="250" y="65" textAnchor="middle" className="text-[10px] font-black fill-white/30" pointerEvents="none">XOR</text>
+
+              <rect x="320" y="125" width="60" height="50" rx="4" fill="#0c1018" stroke={cout ? "#f59e0b" : "#2d3142"} strokeWidth="1.5" />
+              <text x="350" y="155" textAnchor="middle" className="text-[10px] font-black fill-white/30" pointerEvents="none">OR</text>
+
+              {/* Final Outputs */}
+              <line x1="280" y1="60" x2="440" y2="60" stroke={sum ? "#22d3ee" : "#2d3142"} strokeWidth="2" />
+              <line x1="380" y1="150" x2="440" y2="150" stroke={cout ? "#f59e0b" : "#2d3142"} strokeWidth="2" />
+              <circle cx="440" cy="60" r="4" fill={sum ? "#22d3ee" : "#2d3142"} />
+              <circle cx="440" cy="150" r="4" fill={cout ? "#f59e0b" : "#2d3142"} />
+            </svg>
+          </div>
+
+          {/* Outputs Section */}
+          <div className="lg:col-span-2 space-y-4">
+             <div className="p-4 bg-cyan-500/5 border border-cyan-500/20 rounded-xl relative group shadow-[0_0_20px_rgba(6,182,212,0.05)]">
+                <div className="flex justify-between items-center mb-1">
+                   <span className="text-[8px] font-black text-cyan-400 uppercase tracking-widest italic font-serif">SUM (Σ)</span>
+                   <div className={cn("w-1.5 h-1.5 rounded-full", sum === 1 ? "bg-cyan-400 shadow-[0_0_10px_#22d3ee]" : "bg-[#1a1c26]")} />
+                </div>
+                <div className={cn("text-3xl font-mono text-center transition-all duration-700", sum === 1 ? "text-cyan-400 drop-shadow-[0_0_15px_rgba(6,182,212,0.5)]" : "text-[#2d3142]")}>{sum}</div>
+             </div>
+
+             <div className="p-4 bg-amber-500/5 border border-amber-500/20 rounded-xl relative group">
+                <div className="flex justify-between items-center mb-1">
+                   <span className="text-[8px] font-black text-amber-500 uppercase tracking-widest italic font-serif">COUT (Cₒ)</span>
+                   <div className={cn("w-1.5 h-1.5 rounded-full", cout === 1 ? "bg-amber-400 shadow-[0_0_10px_#f59e0b]" : "bg-[#1a1c26]")} />
+                </div>
+                <div className={cn("text-3xl font-mono text-center transition-all duration-700", cout === 1 ? "text-amber-400 drop-shadow-[0_0_15px_rgba(245,158,11,0.5)]" : "text-[#2d3142]")}>{cout}</div>
+             </div>
+          </div>
+        </div>
+
+        <div className="mt-8 pt-4 border-t border-white/5 flex flex-wrap gap-4 justify-between items-center text-[8px] font-mono uppercase tracking-[0.1em]">
+           <div className="flex gap-4">
+              <div className="flex items-center gap-2">
+                 <div className="w-2 h-0.5 bg-cyan-500" />
+                 <span className="text-[#a0a5b8]">Signal Logic Channel</span>
+              </div>
+              <div className="flex items-center gap-2">
+                 <div className="w-2 h-0.5 bg-amber-500" />
+                 <span className="text-[#a0a5b8]">Carry Propagation Path</span>
+              </div>
+           </div>
+           <div className="text-cyan-500/40 italic">
+             Verification Protocol: Verified_X86_COMPAT
+           </div>
+        </div>
       </div>
     </div>
   );
@@ -773,6 +1090,11 @@ export default function App() {
                                x={parseInt(valA.slice(-1)) || 0} 
                                y={parseInt(valB.slice(-1)) || 0} 
                                cin={op === 'sub' ? 1 : 0} 
+                             />
+
+                             <RippleCarryAdder 
+                               valA={valA.slice(-4)} 
+                               valB={valB.slice(-4)} 
                              />
                          </div>
                       </Card>
@@ -1439,11 +1761,86 @@ export default function App() {
                            </div>
                         </div>
 
+                         <div className="space-y-4 pt-4 border-t border-white/5">
+                           <h4 className="text-[10px] text-white font-black uppercase tracking-widest flex items-center gap-2">
+                              <Zap size={12} className="text-purple-500" />
+                              Advanced Design Protocols
+                           </h4>
+                           <div className="grid grid-cols-1 gap-4">
+                              <div className="p-4 bg-[#0a0b10] border border-purple-500/20 rounded-lg group">
+                                 <div className="flex items-center gap-2 mb-3">
+                                    <div className="w-2 h-2 rounded bg-purple-500 shadow-[0_0_8px_#a855f7]" />
+                                    <span className="text-[9px] font-black text-white uppercase italic">Finite State Machines (FSM)</span>
+                                 </div>
+                                 <div className="grid grid-cols-2 gap-4">
+                                    <div className="space-y-2">
+                                       <span className="text-[8px] text-purple-400 font-bold uppercase">Mealy Machine</span>
+                                       <p className="text-[9px] text-[#5e6684] leading-tight">Output depends on both current state and inputs.</p>
+                                    </div>
+                                    <div className="space-y-2 border-l border-white/5 pl-4">
+                                       <span className="text-[8px] text-purple-400 font-bold uppercase">Moore Machine</span>
+                                       <p className="text-[9px] text-[#5e6684] leading-tight">Output depends ONLY on the current state.</p>
+                                    </div>
+                                 </div>
+                              </div>
+
+                              <div className="p-4 bg-[#0a0b10] border border-cyan-500/20 rounded-lg group">
+                                 <div className="flex items-center gap-2 mb-3">
+                                    <div className="w-2 h-2 rounded bg-cyan-500 shadow-[0_0_8px_#06b6d4]" />
+                                    <span className="text-[9px] font-black text-white uppercase italic">Logic Families: TTL vs CMOS</span>
+                                 </div>
+                                 <div className="space-y-3">
+                                    <div className="flex justify-between items-center bg-white/5 p-2 rounded">
+                                       <span className="text-[9px] text-white font-bold">TTL (Transistor-Transistor)</span>
+                                       <span className="text-[8px] text-cyan-400 uppercase">Fast Operation</span>
+                                    </div>
+                                    <div className="flex justify-between items-center bg-white/5 p-2 rounded">
+                                       <span className="text-[9px] text-white font-bold">CMOS (Comp. Metal-Oxide)</span>
+                                       <span className="text-[8px] text-purple-400 uppercase">Low Power Drain</span>
+                                    </div>
+                                    <div className="pt-2 text-[7px] text-[#5e6684] italic uppercase text-center">
+                                       Modern CPU architectures predominantly utilize high-density CMOS.
+                                    </div>
+                                 </div>
+                              </div>
+                           </div>
+                        </div>
+
+                        <div className="bg-gradient-to-br from-cyan-500/10 to-purple-500/10 p-5 rounded-2xl border border-white/10 shadow-2xl relative overflow-hidden group">
+                           <div className="absolute -bottom-8 -right-8 opacity-[0.03] rotate-12 group-hover:rotate-0 transition-transform duration-1000">
+                              <Cpu size={120} />
+                           </div>
+                           <div className="relative z-10 space-y-4">
+                              <div className="flex items-center gap-2">
+                                 <div className="p-1.5 bg-white/10 rounded-lg">
+                                    <RefreshCw size={14} className="text-white animate-spin-slow" />
+                                 </div>
+                                 <h4 className="text-[11px] font-black text-white uppercase tracking-[0.2em]">Engineering Roadmap</h4>
+                              </div>
+                              <div className="space-y-2">
+                                 {[
+                                   { step: '01', title: 'Logic Synthesis', desc: 'Boolean Equation Extraction' },
+                                   { step: '02', title: 'Minimisation', desc: 'Quine-McCluskey Reduction' },
+                                   { step: '03', title: 'Physical Mapping', desc: 'Gate Primitive Selection' },
+                                   { step: '04', title: 'Timing Analysis', desc: 'Propagation Delay Verification' },
+                                 ].map((item, i) => (
+                                   <div key={i} className="flex items-center gap-4 bg-black/40 p-2 rounded-lg border border-white/5 group/row hover:border-cyan-500/30 transition-all">
+                                      <span className="text-[10px] font-black text-cyan-500/50 group-hover/row:text-cyan-400 transition-colors">{item.step}</span>
+                                      <div className="flex-1">
+                                         <span className="text-[9px] font-black text-white block uppercase">{item.title}</span>
+                                         <span className="text-[8px] text-[#5e6684] tracking-tight">{item.desc}</span>
+                                      </div>
+                                   </div>
+                                 ))}
+                              </div>
+                           </div>
+                        </div>
+
                         <div className="pt-4 border-t border-[#2d3142] flex justify-between items-center">
                            <div className="flex items-center gap-3">
                               <Cpu size={14} className="text-cyan-500 animate-pulse" />
                               <div className="text-[8px] font-mono text-[#5e6684] uppercase">
-                                 System_Kernel_Docs: v4.0.5 <br/>
+                                 System_Kernel_Docs: v4.1.0 <br/>
                                  Last_Auth_Audit: 2026_MAY
                               </div>
                            </div>
@@ -1483,7 +1880,7 @@ export default function App() {
                                <div className="flex flex-col gap-1.5">
                                   <label className="text-[7px] text-cyan-500 opacity-50 font-black uppercase tracking-widest">Bus Width Select</label>
                                   <div className="flex gap-1 bg-[#0a0b10] p-1 rounded-sm border border-[#2d3142]">
-                                     {[4, 8, 12, 16, 24, 32].map(w => (
+                                     {[1, 4, 8, 9, 12, 16, 24, 32].map(w => (
                                        <button
                                          key={w}
                                          onClick={() => setRefWidth(w)}
@@ -1518,12 +1915,15 @@ export default function App() {
                             <div className="max-h-[600px] overflow-y-auto custom-scrollbar">
                                <table className="w-full text-left font-mono text-[10px]">
                                   <thead className="bg-[#13151f] text-[#5e6684] border-b border-[#2d3142] uppercase font-black sticky top-0 z-20 backdrop-blur-md bg-opacity-90">
-                                     <tr>
+                                     <tr className="bg-[#13151f] text-[#5e6684] border-b border-[#2d3142] uppercase font-black sticky top-0 z-20 backdrop-blur-md bg-opacity-90">
                                         <th className="px-6 py-5">DEC</th>
-                                        <th className="px-6 py-5">BINARY ({refWidth}-BIT ARCH)</th>
+                                        <th className="px-6 py-5">BINARY ({refWidth}-BIT)</th>
+                                        <th className="px-6 py-5">GRAY</th>
+                                        <th className="px-6 py-5">BCD</th>
+                                        <th className="px-6 py-5">X3</th>
                                         <th className="px-6 py-5">HEX</th>
-                                        <th className="px-6 py-5">OCT</th>
-                                        <th className="px-6 py-5">SYMBOL</th>
+                                        <th className="px-6 py-5">2's COMP</th>
+                                        <th className="px-6 py-5">SYM</th>
                                         <th className="px-6 py-5">PARITY</th>
                                      </tr>
                                    </thead>
@@ -1531,14 +1931,24 @@ export default function App() {
                                       {filteredRefData.map((row) => {
                                          const bits = row.bin.split('');
                                          const highCount = bits.filter(b => b === '1').length;
+                                         const grayCode = decToGray(row.dec, refWidth);
+                                         const bcd = decToBCD(row.dec);
+                                         const x3 = decToExcess3(row.dec);
+                                         const signedVal = getSignedInfo(row.bin, refWidth).twosComplement;
                                          return (
                                            <tr key={row.dec} className="border-b border-[#2d3142]/20 hover:bg-cyan-500/5 transition-all group cursor-default">
                                               <td className="px-6 py-4 font-black text-white/90 group-hover:text-white">{row.dec}</td>
                                               <td className="px-6 py-4 text-cyan-400/80 group-hover:text-cyan-400 tracking-[0.25em] font-medium leading-none">
                                                  {row.bin}
                                               </td>
+                                              <td className="px-6 py-4 text-purple-400 opacity-60 font-medium">{grayCode}</td>
+                                              <td className="px-6 py-4 text-emerald-500/50 font-mono tracking-tighter">{bcd}</td>
+                                              <td className="px-6 py-4 text-orange-400/50 font-mono tracking-tighter">{x3}</td>
                                               <td className="px-6 py-4 text-amber-500/70 group-hover:text-amber-500 font-bold">0x{row.hex}</td>
-                                              <td className="px-6 py-4 text-purple-400/70 group-hover:text-purple-400">{row.oct}</td>
+                                              <td className={cn(
+                                                "px-6 py-4 font-bold",
+                                                signedVal < 0 ? "text-red-400/60" : "text-green-400/60"
+                                              )}>{signedVal}</td>
                                               <td className="px-6 py-4">
                                                  <span className={cn(
                                                    "px-3 py-1 rounded-sm text-[8px] font-black tracking-widest shadow-sm",

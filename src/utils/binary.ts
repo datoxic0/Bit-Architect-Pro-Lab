@@ -27,6 +27,26 @@ export const pad = (s: string, width: number): string => {
 };
 
 /**
+ * Converts decimal digit to BCD (4-bit binary)
+ */
+export const decToBCD = (n: number | string): string => {
+  return n.toString().split('').map(digit => {
+    const d = parseInt(digit);
+    return isNaN(d) ? '0000' : d.toString(2).padStart(4, '0');
+  }).join(' ');
+};
+
+/**
+ * Converts decimal digit to Excess-3
+ */
+export const decToExcess3 = (n: number | string): string => {
+  return n.toString().split('').map(digit => {
+    const d = parseInt(digit);
+    return isNaN(d) ? '0011' : (d + 3).toString(2).padStart(4, '0');
+  }).join(' ');
+};
+
+/**
  * Converts decimal to signed bit width binary (2's complement)
  */
 export const decToBin = (dec: number, width: number): string => {
